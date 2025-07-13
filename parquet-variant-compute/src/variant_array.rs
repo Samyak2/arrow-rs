@@ -138,25 +138,6 @@ impl VariantArray {
         Variant::new(metadata, value)
     }
 
-    /// Return the [`Variant`] instance stored at the given row but with the given offset for the
-    /// `value` binary.
-    ///
-    /// Panics if the index is out of bounds.
-    ///
-    /// Note: Does not do deep validation of the [`Variant`], so it is up to the
-    /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value_at_offset(&self, index: usize, offset: usize) -> Result<Variant, ArrowError> {
-        let metadata = self.metadata_field().as_binary_view().value(index);
-        let value = self.value_field().as_binary_view().value(index);
-        let value = value.get(offset..value.len()).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Got invalid offset {} for variant access",
-                offset
-            ))
-        })?;
-        Ok(Variant::new(metadata, value))
-    }
-
     /// Return a reference to the metadata field of the [`StructArray`]
     pub fn metadata_field(&self) -> &ArrayRef {
         // spec says fields order is not guaranteed, so we search by name

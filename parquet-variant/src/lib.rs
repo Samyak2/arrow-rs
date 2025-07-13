@@ -31,6 +31,7 @@ mod builder;
 mod decoder;
 mod utils;
 mod variant;
+pub mod path;
 
 pub use builder::*;
 pub use variant::*;

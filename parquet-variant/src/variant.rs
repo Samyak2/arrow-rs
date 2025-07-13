@@ -22,6 +22,7 @@ pub use self::object::VariantObject;
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
+use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
 
@@ -1062,6 +1063,35 @@ impl<'m, 'v> Variant<'m, 'v> {
             | Variant::List(VariantList { metadata, .. }) => Some(metadata),
             _ => None,
         }
+    }
+
+    pub fn get_path(&self, path: &VariantPath) -> Result<Option<Variant>, ArrowError> {
+        let mut output = self.clone();
+        for element in path.deref() {
+            match element {
+                VariantPathElement::Field { name } => {
+                    let Variant::Object(variant_object) = output else {
+                        return Ok(None);
+                    };
+                    let field = variant_object.get(name);
+                    let Some(field) = field else {
+                        return Ok(None);
+                    };
+                    output = field;
+                }
+                VariantPathElement::Index { index } => {
+                    let Variant::List(variant_list) = output else {
+                        return Ok(None);
+                    };
+                    let index = variant_list.get(*index);
+                    let Some(index) = index else {
+                        return Ok(None);
+                    };
+                    output = index;
+                },
+            }
+        }
+        Ok(Some(output))
     }
 }
 

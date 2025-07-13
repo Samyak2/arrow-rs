@@ -7,9 +7,51 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, Field};
-use parquet_variant::Variant;
+use parquet_variant::{
+    path::{VariantPath, VariantPathElement},
+    Variant,
+};
 
 use crate::VariantArray;
+
+pub fn variant_get_rowise(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
+    let variant_array: &VariantArray = input.as_any().downcast_ref().ok_or_else(|| {
+        ArrowError::InvalidArgumentError(
+            "expected a VariantArray as the input for variant_get".to_owned(),
+        )
+    })?;
+
+    let as_type = options.as_type.ok_or_else(|| {
+        ArrowError::NotYetImplemented(
+            "getting variant from variant is not implemented yet".to_owned(),
+        )
+    })?;
+    match as_type.data_type() {
+        DataType::UInt64 => {
+            let mut builder = PrimitiveBuilder::<UInt64Type>::new();
+            for i in 0..variant_array.len() {
+                let new_variant = variant_array.value(i);
+                let new_variant = new_variant.get_path(&options.path)?;
+                if let Some(new_variant) = new_variant {
+                    match new_variant {
+                        // TODO: narrowing?
+                        Variant::Int64(i) => builder.append_value(i as u64),
+                        Variant::Null => builder.append_null(),
+                        // TODO: throw error based on CastOptions
+                        _ => builder.append_null(),
+                    }
+                } else {
+                    builder.append_null();
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        other_type => Err(ArrowError::NotYetImplemented(format!(
+            "getting variant as {} is not yet implemented",
+            other_type
+        ))),
+    }
+}
 
 /// Returns an array with the specified path extracted from the variant values.
 pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
@@ -38,8 +80,8 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
             VariantPathElement::Field { name } => {
                 go_to_object_field(variant_array, name, &mut offsets, &mut nulls)?;
             }
-            VariantPathElement::Index { offset } => {
-                go_to_array_index(variant_array, *offset, &mut offsets, &mut nulls)?;
+            VariantPathElement::Index { index } => {
+                go_to_array_index(variant_array, *index, &mut offsets, &mut nulls)?;
             }
         }
     }
@@ -150,27 +192,17 @@ fn go_to_array_index(
 ///
 /// If `as_type` is specified `cast_options` controls what to do if the
 ///
+#[derive(Debug, Clone)]
 pub struct GetOptions<'a> {
     /// What path to extract
-    path: VariantPath,
+    pub path: VariantPath,
     /// if `as_type` is None, the returned array will itself be a StructArray with Variant values
     ///
     /// if `as_type` is `Some(type)` the field is returned as the specified type if possible. To specify returning
     /// a Variant, pass a Field with variant type in the metadata.
-    as_type: Option<Field>,
+    pub as_type: Option<Field>,
     /// Controls the casting behavior (e.g. error vs substituting null on cast error)
-    cast_options: CastOptions<'a>,
-}
-
-/// Represents a qualified path to a potential subfield of an element
-pub struct VariantPath(Vec<VariantPathElement>);
-
-/// Element of a path
-enum VariantPathElement {
-    /// Access field with name `name`
-    Field { name: String },
-    /// Access the list element offset
-    Index { offset: usize },
+    pub cast_options: CastOptions<'a>,
 }
 
 #[cfg(test)]
@@ -178,13 +210,11 @@ mod test {
     use std::sync::Arc;
 
     use arrow::{
-        array::{
-            Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray,
-        },
+        array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray},
         datatypes::UInt64Type,
     };
     use arrow_schema::Field;
-    use parquet_variant::{Variant, VariantBuilder};
+    use parquet_variant::{path::VariantPathElement, Variant, VariantBuilder};
 
     use crate::VariantArrayBuilder;
 

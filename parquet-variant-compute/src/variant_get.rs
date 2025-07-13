@@ -212,7 +212,7 @@ mod test {
 
     use arrow::{
         array::{
-            ArrayRef, ArrowPrimitiveType, BinaryBuilder, NullBufferBuilder, PrimitiveArray,
+            Array, ArrayRef, ArrowPrimitiveType, BinaryBuilder, NullBufferBuilder, PrimitiveArray,
             StructArray,
         },
         datatypes::UInt64Type,
@@ -259,6 +259,7 @@ mod test {
         .unwrap();
 
         let result: &PrimitiveArray<UInt64Type> = result.as_any().downcast_ref().unwrap();
+        assert!(result.nulls().is_none());
         let result = result.values().to_vec();
         assert_eq!(result, vec![1234]);
     }

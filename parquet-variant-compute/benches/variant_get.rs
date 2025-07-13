@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{ArrayRef, ArrowPrimitiveType},
-    datatypes::UInt64Type,
-};
-use arrow_schema::Field;
+use arrow::array::ArrayRef;
 use criterion::{criterion_group, criterion_main, Criterion};
-use parquet_variant::{path::VariantPath, Variant, VariantBuilder};
+use parquet_variant::{Variant, VariantBuilder};
 use parquet_variant_compute::{
     variant_get::{variant_get, GetOptions},
     VariantArray, VariantArrayBuilder,
@@ -33,16 +29,12 @@ pub fn variant_get_bench(c: &mut Criterion) {
     let input: ArrayRef = Arc::new(variant_array);
 
     let options = GetOptions {
-        path: VariantPath(vec![]),
-        as_type: Some(Field::new("", UInt64Type::DATA_TYPE, true)),
+        path: vec![].into(),
+        as_type: None,
         cast_options: Default::default(),
     };
 
-    c.bench_function("variant_get_primitive_columnar", |b| {
-        b.iter(|| variant_get(&input.clone(), options.clone()))
-    });
-
-    c.bench_function("variant_get_primitive_rowwise", |b| {
+    c.bench_function("variant_get_primitive", |b| {
         b.iter(|| variant_get(&input.clone(), options.clone()))
     });
 }

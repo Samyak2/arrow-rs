@@ -1065,33 +1065,32 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    pub fn get_path(&self, path: &VariantPath) -> Result<Option<Variant>, ArrowError> {
+    /// Return a new Variant with the path followed.
+    ///
+    /// If the path is not found, `None` is returned.
+    pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
         let mut output = self.clone();
         for element in path.deref() {
             match element {
                 VariantPathElement::Field { name } => {
                     let Variant::Object(variant_object) = output else {
-                        return Ok(None);
+                        return None;
                     };
                     let field = variant_object.get(name);
-                    let Some(field) = field else {
-                        return Ok(None);
-                    };
+                    let field = field?;
                     output = field;
                 }
                 VariantPathElement::Index { index } => {
                     let Variant::List(variant_list) = output else {
-                        return Ok(None);
+                        return None;
                     };
                     let index = variant_list.get(*index);
-                    let Some(index) = index else {
-                        return Ok(None);
-                    };
+                    let index = index?;
                     output = index;
-                },
+                }
             }
         }
-        Ok(Some(output))
+        Some(output)
     }
 }
 

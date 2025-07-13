@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{
-        Array, ArrayRef, ArrowPrimitiveType, BinaryArray, PrimitiveArray, PrimitiveBuilder,
-        StructArray,
-    },
+    array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, PrimitiveBuilder},
     compute::CastOptions,
     datatypes::UInt64Type,
     error::Result,
@@ -12,19 +9,23 @@ use arrow::{
 use arrow_schema::{ArrowError, DataType, Field};
 use parquet_variant::Variant;
 
-use crate::utils::variant_from_struct_array;
+use crate::VariantArray;
 
 /// Returns an array with the specified path extracted from the variant values.
 pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
-    let (struct_array, metadata_array, value_array) = variant_from_struct_array(input)?;
+    let variant_array: &VariantArray = input.as_any().downcast_ref().ok_or_else(|| {
+        ArrowError::InvalidArgumentError(
+            "expected a VariantArray as the input for variant_get".to_owned(),
+        )
+    })?;
 
     // TODO: can we use OffsetBuffer and NullBuffer here instead?
     //       I couldn't find a way to set individual indices here, so went with vecs.
-    let mut offsets = vec![0; struct_array.len()];
-    let mut nulls = if let Some(struct_nulls) = struct_array.nulls() {
+    let mut offsets = vec![0; variant_array.len()];
+    let mut nulls = if let Some(struct_nulls) = variant_array.nulls() {
         struct_nulls.iter().collect()
     } else {
-        vec![true; struct_array.len()]
+        vec![true; variant_array.len()]
     };
 
     for path in options
@@ -35,24 +36,10 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     {
         match path {
             VariantPathElement::Field { name } => {
-                go_to_object_field(
-                    struct_array,
-                    metadata_array,
-                    value_array,
-                    name,
-                    &mut offsets,
-                    &mut nulls,
-                )?;
+                go_to_object_field(variant_array, name, &mut offsets, &mut nulls)?;
             }
             VariantPathElement::Index { offset } => {
-                go_to_array_index(
-                    struct_array,
-                    metadata_array,
-                    value_array,
-                    *offset,
-                    &mut offsets,
-                    &mut nulls,
-                )?;
+                go_to_array_index(variant_array, *offset, &mut offsets, &mut nulls)?;
             }
         }
     }
@@ -65,9 +52,7 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     match as_type.data_type() {
         DataType::UInt64 => {
             Ok(Arc::new(get_top_level_primitive::<UInt64Type, _>(
-                struct_array,
-                metadata_array,
-                value_array,
+                variant_array,
                 |variant, builder| {
                     match variant {
                         // TODO: narrowing?
@@ -89,28 +74,18 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
 }
 
 fn get_top_level_primitive<T: ArrowPrimitiveType, F: Fn(Variant, &mut PrimitiveBuilder<T>)>(
-    struct_array: &StructArray,
-    metadata_array: &BinaryArray,
-    value_array: &BinaryArray,
+    variant_array: &VariantArray,
     extractor: F,
     offsets: &[i32],
     nulls: &[bool],
 ) -> Result<PrimitiveArray<T>> {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(struct_array.len());
-    for i in 0..struct_array.len() {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(variant_array.len());
+    for i in 0..variant_array.len() {
         if !nulls[i] {
             builder.append_null();
             continue;
         }
-        let metadata = metadata_array.value(i);
-        let value = value_array.value(i);
-        let value = value.get(offsets[i] as usize..value.len()).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Got invalid offset {} for variant access",
-                offsets[i]
-            ))
-        })?;
-        let variant = Variant::new(metadata, value);
+        let variant = variant_array.value_at_offset(i, offsets[i] as usize)?;
 
         extractor(variant, &mut builder);
     }
@@ -119,20 +94,16 @@ fn get_top_level_primitive<T: ArrowPrimitiveType, F: Fn(Variant, &mut PrimitiveB
 }
 
 fn go_to_object_field(
-    struct_array: &StructArray,
-    metadata_array: &BinaryArray,
-    value_array: &BinaryArray,
+    variant_array: &VariantArray,
     name: &str,
     offsets: &mut [i32],
     nulls: &mut [bool],
 ) -> Result<()> {
-    for i in 0..struct_array.len() {
+    for i in 0..variant_array.len() {
         if !nulls[i] {
             continue;
         }
-        let metadata = metadata_array.value(i);
-        let value = value_array.value(i);
-        let variant = Variant::new(metadata, value);
+        let variant = variant_array.value_at_offset(i, offsets[i] as usize)?;
 
         let Variant::Object(variant) = variant else {
             nulls[i] = false;
@@ -147,20 +118,16 @@ fn go_to_object_field(
 }
 
 fn go_to_array_index(
-    struct_array: &StructArray,
-    metadata_array: &BinaryArray,
-    value_array: &BinaryArray,
+    variant_array: &VariantArray,
     index: usize,
     offsets: &mut [i32],
     nulls: &mut [bool],
 ) -> Result<()> {
-    for i in 0..struct_array.len() {
+    for i in 0..variant_array.len() {
         if !nulls[i] {
             continue;
         }
-        let metadata = metadata_array.value(i);
-        let value = value_array.value(i);
-        let variant = Variant::new(metadata, value);
+        let variant = variant_array.value_at_offset(i, offsets[i] as usize)?;
 
         let Variant::List(variant) = variant else {
             nulls[i] = false;
@@ -212,13 +179,14 @@ mod test {
 
     use arrow::{
         array::{
-            Array, ArrayRef, ArrowPrimitiveType, BinaryBuilder, NullBufferBuilder, PrimitiveArray,
-            StructArray,
+            Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray,
         },
         datatypes::UInt64Type,
     };
-    use arrow_schema::{DataType, Field};
-    use parquet_variant::VariantBuilder;
+    use arrow_schema::Field;
+    use parquet_variant::{Variant, VariantBuilder};
+
+    use crate::VariantArrayBuilder;
 
     use super::{variant_get, GetOptions, VariantPath};
 
@@ -228,23 +196,10 @@ mod test {
         builder.append_value(1234i64);
         let (metadata, value) = builder.finish();
 
-        let mut builder = BinaryBuilder::new();
-        builder.append_value(metadata);
-        let metadata = builder.finish();
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::try_new(&metadata, &value).unwrap());
 
-        let mut builder = BinaryBuilder::new();
-        builder.append_value(value);
-        let value = builder.finish();
-
-        let variant_array = StructArray::new(
-            vec![
-                Field::new("metadata", DataType::Binary, true),
-                Field::new("value", DataType::Binary, true),
-            ]
-            .into(),
-            vec![Arc::new(metadata), Arc::new(value)],
-            NullBufferBuilder::new(1).finish(),
-        );
+        let variant_array = builder.build();
 
         let input = Arc::new(variant_array) as ArrayRef;
 

@@ -22,7 +22,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, Field};
-use parquet_variant::path::VariantPath;
+use parquet_variant::{path::VariantPath, Variant};
 
 use crate::{VariantArray, VariantArrayBuilder};
 
@@ -52,9 +52,18 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         // TODO: perf?
         let new_variant = new_variant.get_path(&options.path);
         if let Some(new_variant) = new_variant {
-            // TODO: we're decoding the value and doing a copy into a variant value again. This
-            // copy can be much smarter.
-            builder.append_variant(new_variant);
+            match new_variant {
+                Variant::Object(variant_object) => {
+                    builder.append_variant_buffers(
+                        variant_object.metadata.bytes,
+                        variant_object.value,
+                    );
+                }
+                Variant::List(variant_list) => {
+                    builder.append_variant_buffers(variant_list.metadata.bytes, variant_list.value);
+                }
+                _ => builder.append_variant(new_variant),
+            }
         } else {
             builder.append_null();
         }
@@ -189,9 +198,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Nested values are handled specially by ObjectBuilder and ListBuilder"
-    )]
     fn get_complex_variant() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,

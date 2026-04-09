@@ -26,7 +26,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// Tracks row numbers within a Parquet file and emits them as an `Int64Array`.
-pub(crate) struct RowNumberReader {
+pub struct RowNumberReader {
     /// Pre-computed row ranges that are not read yet.
     ///
     /// This reader only keeps track of the ranges of row numbers for each row group. The range is
@@ -39,7 +39,7 @@ pub(crate) struct RowNumberReader {
 }
 
 impl RowNumberReader {
-    pub(crate) fn try_new<'a>(
+    pub fn try_new<'a>(
         parquet_metadata: &'a ParquetMetaData,
         row_groups: impl Iterator<Item = &'a RowGroupMetaData>,
     ) -> Result<Self> {

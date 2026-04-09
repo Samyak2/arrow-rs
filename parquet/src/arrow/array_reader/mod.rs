@@ -45,7 +45,7 @@ mod null_array;
 mod primitive_array;
 mod row_group_cache;
 mod row_group_index;
-mod row_number;
+pub mod row_number;
 mod struct_array;
 
 #[cfg(test)]

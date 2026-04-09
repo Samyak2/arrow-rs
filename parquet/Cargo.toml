@@ -276,6 +276,11 @@ harness = false
 required-features = ["arrow"]
 
 [[bench]]
+name = "row_number_reader"
+harness = false
+required-features = ["arrow", "experimental"]
+
+[[bench]]
 name = "bloom_filter"
 harness = false
 
